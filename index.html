@@ -1,117 +1,352 @@
+<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Object Detection</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-    <style>
-        body {
-            margin: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            background: #000;
-        }
-        video {
-            transform: scaleX(-1); /* Mirror the video */
-            width: 80%;
-            max-width: 600px;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-        }
-        canvas {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 80%;
-            max-width: 600px;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Advanced Object Detection</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+  <style>
+    :root {
+      --sidebar-width: 240px;
+      --bg-color: #121212;
+      --accent-color: #1f1f1f;
+      --text-color: #e0e0e0;
+      --highlight: #00bfa5;
+      --font-family: 'Segoe UI', sans-serif;
+    }
+    [data-theme="light"] {
+      --bg-color: #fafafa;
+      --accent-color: #fff;
+      --text-color: #222;
+      --highlight: #00695c;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      display: flex;
+      height: 100vh;
+      font-family: var(--font-family);
+      background: var(--bg-color);
+      color: var(--text-color);
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    #sidebar {
+      width: var(--sidebar-width);
+      background: var(--accent-color);
+      padding: 1rem;
+      overflow-y: auto;
+      border-right: 1px solid #333;
+    }
+    #sidebar h2 {
+      margin-bottom: 1rem;
+      font-size: 1.2rem;
+      color: var(--highlight);
+      text-align: center;
+    }
+    .item {
+      margin-bottom: 0.6rem;
+      padding: 0.4rem;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      transition: background 0.2s;
+    }
+    .item:hover { background: #333; }
+
+    /* Main & Header */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    #header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.8rem;
+      padding: 0.8rem 1rem;
+      background: var(--accent-color);
+      border-bottom: 1px solid #333;
+    }
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+      align-items: center;
+      flex: 1;
+    }
+    #controls label {
+      display: flex;
+      flex-direction: column;
+      font-size: 0.8rem;
+    }
+    #controls input[type=range],
+    #controls input[type=number],
+    #controls select {
+      margin-top: 0.2rem;
+      width: 120px;
+    }
+    #controls input[type=checkbox] {
+      margin-left: 0.2rem;
+      transform: scale(1.2);
+    }
+    button {
+      background: var(--highlight);
+      border: none;
+      border-radius: 4px;
+      padding: 0.5rem 0.8rem;
+      color: #fff;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.8; }
+
+    /* Video + Canvas */
+    #viewport {
+      position: relative;
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 1rem;
+      overflow: hidden;
+      background: #000;
+    }
+    #video, #overlay {
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+      max-width: 100%;
+      height: auto;
+    }
+    #video { transform: none; }
+    #overlay {
+      position: absolute;
+      pointer-events: none;
+    }
+
+    #fpsDisplay {
+      margin-left: 1rem;
+      font-weight: bold;
+      color: var(--highlight);
+    }
+  </style>
 </head>
-<body>
-    <video id="video" autoplay muted></video>
-    <canvas id="overlay"></canvas>
+<body data-theme="dark">
+  <div id="sidebar">
+    <h2>Detections</h2>
+  </div>
 
-    <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('overlay');
-        const ctx = canvas.getContext('2d');
+  <div id="main">
+    <div id="header">
+      <div id="controls">
+        <label>Camera:
+          <select id="cameraSelect"></select>
+        </label>
+        <label>Min Confidence: <span id="th-label">50%</span>
+          <input type="range" id="threshold" min="0" max="100" value="50">
+        </label>
+        <label>Max Objects: <span id="max-label">10</span>
+          <input type="range" id="maxObjects" min="1" max="20" value="10">
+        </label>
+        <label>Detection FPS: <span id="fps-label">15</span>
+          <input type="range" id="fps" min="1" max="30" value="15">
+        </label>
+        <label>Show Labels
+          <input type="checkbox" id="toggleLabels" checked>
+        </label>
+        <button id="snapshotBtn">📸 Snapshot</button>
+      </div>
+      <button id="themeToggle">☀️ Light</button>
+      <div id="fpsDisplay">FPS: 0</div>
+    </div>
 
-        let model;
+    <div id="viewport">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="overlay"></canvas>
+    </div>
+  </div>
 
-        async function setupCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                return new Promise(resolve => {
-                    video.onloadedmetadata = () => {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        resolve();
-                    };
-                });
-            } catch (error) {
-                console.error("Error setting up camera:", error);
-                alert("Unable to access camera. Please check permissions.");
-            }
-        }
+  <audio id="beep" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
 
-        async function loadModel() {
-            try {
-                model = await cocoSsd.load();
-                console.log("Coco-SSD model loaded successfully.");
-            } catch (error) {
-                console.error("Error loading Coco-SSD model:", error);
-                alert("Failed to load object detection model. Please check your connection.");
-            }
-        }
+  <script>
+    const video        = document.getElementById('video');
+    const canvas       = document.getElementById('overlay');
+    const ctx          = canvas.getContext('2d');
+    const sidebar      = document.getElementById('sidebar');
+    const threshIn     = document.getElementById('threshold');
+    const thLabel      = document.getElementById('th-label');
+    const maxIn        = document.getElementById('maxObjects');
+    const maxLabel     = document.getElementById('max-label');
+    const fpsIn        = document.getElementById('fps');
+    const fpsLabel     = document.getElementById('fps-label');
+    const toggleLabels = document.getElementById('toggleLabels');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const snapshotBtn  = document.getElementById('snapshotBtn');
+    const themeToggle  = document.getElementById('themeToggle');
+    const fpsDisplay   = document.getElementById('fpsDisplay');
+    const beep         = document.getElementById('beep');
 
-        async function detectObjects() {
-            if (!model) return;
+    let model, minScore, maxObjects, intervalMs;
+    let lastTime = performance.now(), frameCount = 0;
 
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // Sync UI labels
+    threshIn.oninput = () => thLabel.textContent = threshIn.value + '%';
+    maxIn.oninput    = () => maxLabel.textContent = maxIn.value;
+    fpsIn.oninput    = () => fpsLabel.textContent = fpsIn.value;
 
-            const predictions = await model.detect(video);
+    function updateParams(){
+      minScore   = +threshIn.value / 100;
+      maxObjects = +maxIn.value;
+      intervalMs = 1000 / +fpsIn.value;
+    }
 
-            predictions.forEach(prediction => {
-                const [x, y, width, height] = prediction.bbox;
-                const label = prediction.class;
-                const score = (prediction.score * 100).toFixed(2);
+    // Theme toggle
+    themeToggle.onclick = () => {
+      const body = document.body;
+      if(body.getAttribute('data-theme') === 'dark'){
+        body.setAttribute('data-theme','light');
+        themeToggle.textContent = '🌙 Dark';
+      } else {
+        body.setAttribute('data-theme','dark');
+        themeToggle.textContent = '☀️ Light';
+      }
+    };
 
-                // Draw bounding box
-                ctx.beginPath();
-                ctx.rect(x, y, width, height);
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = 'green';
-                ctx.stroke();
+    // Snapshot
+    snapshotBtn.onclick = () => {
+      const w = canvas.width, h = canvas.height;
+      const tmp = document.createElement('canvas');
+      tmp.width = w; tmp.height = h;
+      const tctx = tmp.getContext('2d');
+      tctx.drawImage(video, 0,0,w,h);
+      tctx.drawImage(canvas, 0,0);
+      tmp.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'snapshot.png';
+        a.click();
+      });
+    };
 
-                // Draw label
-                ctx.font = "16px Arial";
-                ctx.fillStyle = "blue";
-                ctx.fillText(`${label} (${score}%)`, x, y - 10);
-            });
+    // List cameras
+    async function listCameras(){
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      devices
+        .filter(d => d.kind === 'videoinput')
+        .forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.text = d.label || `Camera ${cameraSelect.length+1}`;
+          cameraSelect.appendChild(opt);
+        });
+    }
+    cameraSelect.onchange = startCamera;
 
-            if (predictions.length === 0) {
-                ctx.font = "20px Arial";
-                ctx.fillStyle = "red";
-                ctx.fillText("Item not detected", 20, 30);
-            }
+    // Start camera with fallback on OverconstrainedError
+    async function startCamera(){
+      if(video.srcObject){
+        video.srcObject.getTracks().forEach(t => t.stop());
+      }
+      const deviceId = cameraSelect.value;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: deviceId } }
+        });
+        video.srcObject = stream;
+      } catch(err) {
+        console.warn('Exact camera not supported, using default. ', err);
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+      }
+      return new Promise(res => video.onloadedmetadata = res);
+    }
 
-            requestAnimationFrame(detectObjects);
-        }
+    // Load model
+    async function loadModel(){
+      model = await cocoSsd.load();
+    }
 
-        async function main() {
-            await setupCamera();
-            await loadModel();
-            detectObjects();
-        }
+    // Sidebar update
+    function updateSidebar(preds){
+      sidebar.querySelectorAll('.item').forEach(n => n.remove());
+      const list = preds
+        .filter(p => p.score >= minScore)
+        .sort((a,b) => b.score - a.score)
+        .slice(0, maxObjects);
+      if(list.length === 0){
+        const none = document.createElement('div');
+        none.className = 'item';
+        none.textContent = 'No objects detected';
+        sidebar.appendChild(none);
+      } else {
+        list.forEach(p => {
+          const d = document.createElement('div');
+          d.className = 'item';
+          d.innerHTML = `<span>${p.class}</span><span>${(p.score*100).toFixed(1)}%</span>`;
+          sidebar.appendChild(d);
+        });
+      }
+    }
 
-        main().catch(console.error);
-    </script>
+    // Draw on canvas
+    function draw(preds){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      preds
+        .filter(p => p.score >= minScore)
+        .sort((a,b) => b.score - a.score)
+        .slice(0, maxObjects)
+        .forEach(p => {
+          const [x,y,w,h] = p.bbox;
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--highlight');
+          ctx.strokeRect(x,y,w,h);
+          if(toggleLabels.checked){
+            const txt = `${p.class} ${(p.score*100).toFixed(1)}%`;
+            ctx.font = '16px sans-serif';
+            const tw = ctx.measureText(txt).width + 8;
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(x, y - 22, tw, 22);
+            ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-color');
+            ctx.fillText(txt, x + 4, y - 6);
+          }
+          if(p.score > 0.9) beep.play();
+        });
+    }
+
+    // Detection loop with FPS counter
+    async function detectLoop(){
+      updateParams();
+      const preds = await model.detect(video);
+      draw(preds);
+      updateSidebar(preds);
+
+      frameCount++;
+      const now = performance.now();
+      if(now - lastTime >= 1000){
+        fpsDisplay.textContent = 'FPS: ' + frameCount;
+        frameCount = 0;
+        lastTime = now;
+      }
+      setTimeout(detectLoop, intervalMs);
+    }
+
+    // Main
+    async function main(){
+      await listCameras();
+      await startCamera();
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      await loadModel();
+      detectLoop();
+    }
+
+    main().catch(err => {
+      console.error(err);
+      alert('Error: ' + err.message);
+    });
+  </script>
 </body>
 </html>
