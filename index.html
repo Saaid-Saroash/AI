@@ -32,7 +32,6 @@
       overflow: hidden;
     }
 
-    /* Sidebar */
     #sidebar {
       width: var(--sidebar-width);
       background: var(--accent-color);
@@ -56,7 +55,6 @@
     }
     .item:hover { background: #333; }
 
-    /* Main & Header */
     #main {
       flex: 1;
       display: flex;
@@ -104,7 +102,6 @@
     }
     button:hover { opacity: 0.8; }
 
-    /* Video + Canvas */
     #viewport {
       position: relative;
       flex: 1;
@@ -115,18 +112,16 @@
       overflow: hidden;
       background: #000;
     }
-    #video, #overlay {
+    #videoCanvas, #overlay {
       border-radius: 8px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.6);
       max-width: 100%;
       height: auto;
     }
-    #video { transform: none; }
     #overlay {
       position: absolute;
       pointer-events: none;
     }
-
     #fpsDisplay {
       margin-left: 1rem;
       font-weight: bold;
@@ -145,16 +140,22 @@
         <label>Camera:
           <select id="cameraSelect"></select>
         </label>
-        <label>Min Confidence: <span id="th-label">50%</span>
+        <label>Min Confidence: <span id="th-label">50%</span>
           <input type="range" id="threshold" min="0" max="100" value="50">
         </label>
-        <label>Max Objects: <span id="max-label">10</span>
+        <label>Max Objects: <span id="max-label">10</span>
           <input type="range" id="maxObjects" min="1" max="20" value="10">
         </label>
-        <label>Detection FPS: <span id="fps-label">15</span>
+        <label>Detection FPS: <span id="fps-label">15</span>
           <input type="range" id="fps" min="1" max="30" value="15">
         </label>
-        <label>Show Labels
+        <label>Zoom (0.5x–2x):
+          <input type="range" id="zoomSlider" min="0.5" max="2" step="0.1" value="1">
+        </label>
+        <label>Mirror
+          <input type="checkbox" id="mirrorToggle">
+        </label>
+        <label>Show Labels
           <input type="checkbox" id="toggleLabels" checked>
         </label>
         <button id="snapshotBtn">📸 Snapshot</button>
@@ -164,7 +165,7 @@
     </div>
 
     <div id="viewport">
-      <video id="video" autoplay muted playsinline></video>
+      <canvas id="videoCanvas"></canvas>
       <canvas id="overlay"></canvas>
     </div>
   </div>
@@ -172,30 +173,35 @@
   <audio id="beep" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
 
   <script>
-    const video        = document.getElementById('video');
-    const canvas       = document.getElementById('overlay');
-    const ctx          = canvas.getContext('2d');
-    const sidebar      = document.getElementById('sidebar');
-    const threshIn     = document.getElementById('threshold');
-    const thLabel      = document.getElementById('th-label');
-    const maxIn        = document.getElementById('maxObjects');
-    const maxLabel     = document.getElementById('max-label');
-    const fpsIn        = document.getElementById('fps');
-    const fpsLabel     = document.getElementById('fps-label');
-    const toggleLabels = document.getElementById('toggleLabels');
-    const cameraSelect = document.getElementById('cameraSelect');
-    const snapshotBtn  = document.getElementById('snapshotBtn');
-    const themeToggle  = document.getElementById('themeToggle');
-    const fpsDisplay   = document.getElementById('fpsDisplay');
-    const beep         = document.getElementById('beep');
+    const videoCanvas   = document.getElementById('videoCanvas');
+    const overlay       = document.getElementById('overlay');
+    const vCtx          = videoCanvas.getContext('2d');
+    const oCtx          = overlay.getContext('2d');
 
+    const zoomSlider    = document.getElementById('zoomSlider');
+    const mirrorToggle  = document.getElementById('mirrorToggle');
+    const cameraSelect  = document.getElementById('cameraSelect');
+    const toggleLabels  = document.getElementById('toggleLabels');
+    const sidebar       = document.getElementById('sidebar');
+    const fpsDisplay    = document.getElementById('fpsDisplay');
+    const threshIn      = document.getElementById('threshold');
+    const maxIn         = document.getElementById('maxObjects');
+    const fpsIn         = document.getElementById('fps');
+    const snapshotBtn   = document.getElementById('snapshotBtn');
+    const themeToggle   = document.getElementById('themeToggle');
+    const beep          = document.getElementById('beep');
+
+    const thLabel       = document.getElementById('th-label');
+    const maxLabel      = document.getElementById('max-label');
+    const fpsLabel      = document.getElementById('fps-label');
+
+    let video = document.createElement('video');
+    video.setAttribute('autoplay', '');
+    video.setAttribute('muted', '');
+    video.setAttribute('playsinline', '');
+    let videoStream;
     let model, minScore, maxObjects, intervalMs;
-    let lastTime = performance.now(), frameCount = 0;
-
-    // Sync UI labels
-    threshIn.oninput = () => thLabel.textContent = threshIn.value + '%';
-    maxIn.oninput    = () => maxLabel.textContent = maxIn.value;
-    fpsIn.oninput    = () => fpsLabel.textContent = fpsIn.value;
+    let frameCount = 0, lastTime = performance.now();
 
     function updateParams(){
       minScore   = +threshIn.value / 100;
@@ -203,7 +209,10 @@
       intervalMs = 1000 / +fpsIn.value;
     }
 
-    // Theme toggle
+    threshIn.oninput = () => thLabel.textContent = threshIn.value + '%';
+    maxIn.oninput    = () => maxLabel.textContent = maxIn.value;
+    fpsIn.oninput    = () => fpsLabel.textContent = fpsIn.value;
+
     themeToggle.onclick = () => {
       const body = document.body;
       if(body.getAttribute('data-theme') === 'dark'){
@@ -215,14 +224,13 @@
       }
     };
 
-    // Snapshot
     snapshotBtn.onclick = () => {
-      const w = canvas.width, h = canvas.height;
       const tmp = document.createElement('canvas');
-      tmp.width = w; tmp.height = h;
+      tmp.width = videoCanvas.width;
+      tmp.height = videoCanvas.height;
       const tctx = tmp.getContext('2d');
-      tctx.drawImage(video, 0,0,w,h);
-      tctx.drawImage(canvas, 0,0);
+      tctx.drawImage(videoCanvas, 0, 0);
+      tctx.drawImage(overlay, 0, 0);
       tmp.toBlob(blob => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -231,96 +239,112 @@
       });
     };
 
-    // List cameras
     async function listCameras(){
       const devices = await navigator.mediaDevices.enumerateDevices();
-      devices
-        .filter(d => d.kind === 'videoinput')
-        .forEach(d => {
-          const opt = document.createElement('option');
-          opt.value = d.deviceId;
-          opt.text = d.label || `Camera ${cameraSelect.length+1}`;
-          cameraSelect.appendChild(opt);
-        });
+      devices.filter(d => d.kind === 'videoinput').forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.text = d.label || `Camera ${cameraSelect.length + 1}`;
+        cameraSelect.appendChild(opt);
+      });
     }
+
     cameraSelect.onchange = startCamera;
 
-    // Start camera with fallback on OverconstrainedError
     async function startCamera(){
-      if(video.srcObject){
-        video.srcObject.getTracks().forEach(t => t.stop());
-      }
+      if(videoStream) videoStream.getTracks().forEach(t => t.stop());
       const deviceId = cameraSelect.value;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { deviceId: { exact: deviceId } }
         });
-        video.srcObject = stream;
-      } catch(err) {
-        console.warn('Exact camera not supported, using default. ', err);
+        videoStream = stream;
+      } catch {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
+        videoStream = stream;
       }
-      return new Promise(res => video.onloadedmetadata = res);
+      video.srcObject = videoStream;
+      return new Promise(res => video.onloadedmetadata = () => {
+        videoCanvas.width = overlay.width = video.videoWidth;
+        videoCanvas.height = overlay.height = video.videoHeight;
+        res();
+      });
     }
 
-    // Load model
     async function loadModel(){
       model = await cocoSsd.load();
     }
 
-    // Sidebar update
+    function drawDetections(preds, scale, offsetX, offsetY, isMirror){
+      oCtx.clearRect(0, 0, overlay.width, overlay.height);
+      preds.slice(0, maxObjects).forEach(p => {
+        if(p.score < minScore) return;
+        let [x, y, w, h] = p.bbox;
+        x = (x - offsetX) * scale;
+        y = (y - offsetY) * scale;
+        w = w * scale;
+        h = h * scale;
+        if(isMirror) x = overlay.width - x - w;
+
+        oCtx.strokeStyle = '#00bfa5';
+        oCtx.lineWidth = 2;
+        oCtx.strokeRect(x, y, w, h);
+
+        if(toggleLabels.checked){
+          const label = `${p.class} ${(p.score*100).toFixed(1)}%`;
+          const textWidth = oCtx.measureText(label).width + 8;
+          oCtx.font = '16px sans-serif';
+          oCtx.fillStyle = 'rgba(0,0,0,0.6)';
+          oCtx.fillRect(x, y - 22, textWidth, 22);
+          oCtx.fillStyle = '#e0e0e0';
+          oCtx.fillText(label, x + 4, y - 6);
+        }
+
+        if(p.score > 0.9) beep.play();
+      });
+    }
+
     function updateSidebar(preds){
-      sidebar.querySelectorAll('.item').forEach(n => n.remove());
-      const list = preds
-        .filter(p => p.score >= minScore)
-        .sort((a,b) => b.score - a.score)
-        .slice(0, maxObjects);
-      if(list.length === 0){
-        const none = document.createElement('div');
-        none.className = 'item';
-        none.textContent = 'No objects detected';
-        sidebar.appendChild(none);
+      sidebar.querySelectorAll('.item').forEach(el => el.remove());
+      const filtered = preds.filter(p => p.score >= minScore).slice(0, maxObjects);
+      if (filtered.length === 0) {
+        const item = document.createElement('div');
+        item.className = 'item';
+        item.textContent = 'No objects detected';
+        sidebar.appendChild(item);
       } else {
-        list.forEach(p => {
-          const d = document.createElement('div');
-          d.className = 'item';
-          d.innerHTML = `<span>${p.class}</span><span>${(p.score*100).toFixed(1)}%</span>`;
-          sidebar.appendChild(d);
+        filtered.forEach(p => {
+          const item = document.createElement('div');
+          item.className = 'item';
+          item.innerHTML = `<span>${p.class}</span><span>${(p.score*100).toFixed(1)}%</span>`;
+          sidebar.appendChild(item);
         });
       }
     }
 
-    // Draw on canvas
-    function draw(preds){
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      preds
-        .filter(p => p.score >= minScore)
-        .sort((a,b) => b.score - a.score)
-        .slice(0, maxObjects)
-        .forEach(p => {
-          const [x,y,w,h] = p.bbox;
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--highlight');
-          ctx.strokeRect(x,y,w,h);
-          if(toggleLabels.checked){
-            const txt = `${p.class} ${(p.score*100).toFixed(1)}%`;
-            ctx.font = '16px sans-serif';
-            const tw = ctx.measureText(txt).width + 8;
-            ctx.fillStyle = 'rgba(0,0,0,0.6)';
-            ctx.fillRect(x, y - 22, tw, 22);
-            ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-color');
-            ctx.fillText(txt, x + 4, y - 6);
-          }
-          if(p.score > 0.9) beep.play();
-        });
-    }
-
-    // Detection loop with FPS counter
     async function detectLoop(){
       updateParams();
-      const preds = await model.detect(video);
-      draw(preds);
+      const zoom = parseFloat(zoomSlider.value);
+      const isMirror = mirrorToggle.checked;
+
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const sw = vw / zoom;
+      const sh = vh / zoom;
+      const sx = (vw - sw) / 2;
+      const sy = (vh - sh) / 2;
+
+      vCtx.save();
+      vCtx.clearRect(0, 0, vw, vh);
+      if(isMirror){
+        vCtx.translate(vw, 0);
+        vCtx.scale(-1, 1);
+      }
+      vCtx.drawImage(video, sx, sy, sw, sh, 0, 0, vw, vh);
+      vCtx.restore();
+
+      const preds = await model.detect(videoCanvas);
+      drawDetections(preds, vw / sw, sx, sy, isMirror);
       updateSidebar(preds);
 
       frameCount++;
@@ -330,23 +354,18 @@
         frameCount = 0;
         lastTime = now;
       }
+
       setTimeout(detectLoop, intervalMs);
     }
 
-    // Main
     async function main(){
       await listCameras();
       await startCamera();
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
       await loadModel();
       detectLoop();
     }
 
-    main().catch(err => {
-      console.error(err);
-      alert('Error: ' + err.message);
-    });
+    main().catch(e => alert('Error: ' + e.message));
   </script>
 </body>
 </html>
